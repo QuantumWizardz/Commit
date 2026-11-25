@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- extension/welcome.html — opened once when the extension is installed (README 9.1):
+     what is collected, what is never collected, where it goes, how to exclude websites, how to pair. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome to Commit</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    main { max-width: 760px; margin: 32px auto; padding: 0 16px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+    li { margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <span class="chip tag">Private by design</span>
+      <h1 style="margin-top: 10px;">Welcome to the Commit extension</h1>
+      <p>This extension tells the Commit app on <strong>this computer</strong> which website you are on and for how long,
+        so your weekly report can show where your time went.</p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>What is collected</h2>
+        <ul>
+          <li>The website <strong>domain</strong> (for example <em>youtube.com</em>), never the full address.</li>
+          <li>The <strong>page or video title</strong> — used only to choose a category (Work, Learning, Entertainment…),
+            then thrown away. It is never stored.</li>
+          <li>The <strong>time</strong> you spend on the site.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>What is never collected</h2>
+        <ul>
+          <li>Page content, things you type, form inputs or passwords.</li>
+          <li>Full web addresses (URLs).</li>
+          <li>Anything in incognito windows — the extension does not run there.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Where it goes</h2>
+      <p>Only to the Commit app on this computer, at <code>http://127.0.0.1</code>. The extension has no permission to
+        contact any other server. If you turned on "title categorisation with my own API key" in the Commit app,
+        the app sends a shortened title (without e-mails, links or long numbers) to your chosen AI provider.</p>
+    </div>
+
+    <div class="card">
+      <h2>Don't track a website</h2>
+      <p>Click the Commit icon in the toolbar and press <strong>Don't track</strong>, or add a domain such as
+        <em>bank.com</em> to the list. Time on those sites appears only as <strong>"Private"</strong>, without the site's name.</p>
+    </div>
+
+    <div class="card">
+      <h2>Connect to the Commit app (once)</h2>
+      <ol>
+        <li>Start the Commit app (<code>python -m agent.main</code>).</li>
+        <li>In the menu bar: <strong>Commit → Settings → Extension pairing token…</strong> and copy the token.</li>
+        <li>Click the Commit icon in Chrome's toolbar, paste the token under <strong>Pairing</strong>, and press <strong>Save</strong>.
+          The status should change to <strong>Connected</strong>.</li>
+      </ol>
+    </div>
+  </main>
+</body>
+</html>

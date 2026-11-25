@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- extension/popup.html — the window that opens when the Commit icon is clicked:
+     connection status, "don't track this site", the private list, and pairing settings. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Commit</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { width: 340px; padding: 12px; }
+    .card { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="row" style="justify-content: space-between;">
+      <h1 style="margin: 0;">Commit</h1>
+      <span class="chip"><span id="status-dot" class="dot"></span><span id="status-text">Checking…</span></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">This site</div>
+    <div class="row" style="justify-content: space-between; margin-top: 4px;">
+      <strong id="current-domain">–</strong>
+      <button id="current-toggle" class="button secondary" hidden>Don't track</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Don't track these websites</h2>
+    <p class="label">Time on these sites is shown only as "Private", with no site name.</p>
+    <ul id="private-list" class="domains"></ul>
+    <div class="row">
+      <input id="private-input" type="text" placeholder="e.g. bank.com" aria-label="Domain to stop tracking">
+      <button id="private-add" class="button">Add</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Pairing</h2>
+    <p class="label">Commit menu bar → Settings → Extension pairing token. Paste it here once.</p>
+    <label class="label" for="token-input">Pairing token</label>
+    <input id="token-input" type="password" autocomplete="off">
+    <label class="label" for="port-input">Port</label>
+    <div class="row">
+      <input id="port-input" type="number" min="1024" max="65535">
+      <button id="settings-save" class="button">Save</button>
+    </div>
+    <p id="message" class="label" style="margin-top: 8px;"></p>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
