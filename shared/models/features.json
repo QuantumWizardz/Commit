@@ -1,0 +1,115 @@
+{
+  "feature_names": [
+    "keystrokes",
+    "error_keys",
+    "shortcut_keys",
+    "clicks",
+    "scrolls",
+    "mouse_distance",
+    "app_switches",
+    "error_key_ratio",
+    "shortcut_ratio",
+    "keyboard_share",
+    "keystrokes_mean_3m",
+    "keystrokes_std_3m",
+    "error_keys_mean_3m",
+    "error_keys_std_3m",
+    "shortcut_keys_mean_3m",
+    "shortcut_keys_std_3m",
+    "clicks_mean_3m",
+    "clicks_std_3m",
+    "scrolls_mean_3m",
+    "scrolls_std_3m",
+    "mouse_distance_mean_3m",
+    "mouse_distance_std_3m",
+    "app_switches_mean_3m",
+    "app_switches_std_3m",
+    "error_key_ratio_mean_3m",
+    "error_key_ratio_std_3m",
+    "shortcut_ratio_mean_3m",
+    "shortcut_ratio_std_3m",
+    "keyboard_share_mean_3m",
+    "keyboard_share_std_3m",
+    "idle_share_3m",
+    "keystrokes_mean_5m",
+    "keystrokes_std_5m",
+    "error_keys_mean_5m",
+    "error_keys_std_5m",
+    "shortcut_keys_mean_5m",
+    "shortcut_keys_std_5m",
+    "clicks_mean_5m",
+    "clicks_std_5m",
+    "scrolls_mean_5m",
+    "scrolls_std_5m",
+    "mouse_distance_mean_5m",
+    "mouse_distance_std_5m",
+    "app_switches_mean_5m",
+    "app_switches_std_5m",
+    "error_key_ratio_mean_5m",
+    "error_key_ratio_std_5m",
+    "shortcut_ratio_mean_5m",
+    "shortcut_ratio_std_5m",
+    "keyboard_share_mean_5m",
+    "keyboard_share_std_5m",
+    "idle_share_5m"
+  ],
+  "raw_count_columns": [
+    "keystrokes",
+    "error_keys",
+    "shortcut_keys",
+    "clicks",
+    "scrolls",
+    "mouse_distance",
+    "app_switches"
+  ],
+  "rolling_windows_minutes": [
+    3,
+    5
+  ],
+  "idle_definition": "a minute is idle when keystrokes + clicks + scrolls + mouse_distance == 0",
+  "normalisation": {
+    "method": "per-person z-score: (value - baseline mean) / baseline std",
+    "baseline": "the user's first N active (non-idle) minutes",
+    "calibration_active_minutes": 15,
+    "zero_std_replacement": 1.0,
+    "code": "shared/features.py: select_calibration_minutes, compute_baseline, apply_baseline"
+  },
+  "condition_model": {
+    "file": "condition_model.pkl",
+    "algorithm": "random_forest",
+    "hyperparameters": {
+      "model__min_samples_leaf": 5
+    },
+    "classes": [
+      "interruptions",
+      "neutral",
+      "time_pressure"
+    ]
+  },
+  "load_model": {
+    "file": "load_model.pkl",
+    "algorithm": "logistic_regression",
+    "hyperparameters": {
+      "model__C": 0.1
+    },
+    "label": "load_person_median",
+    "classes": [
+      "high",
+      "low"
+    ],
+    "load_score": "100 x predict_proba column of class 'high'"
+  },
+  "training_data": {
+    "dataset": "SWELL-KW computer-interaction features (uLog, per minute)",
+    "participants": 25,
+    "rows": 2243
+  },
+  "library_versions": {
+    "python": "3.14.6",
+    "scikit-learn": "1.9.1",
+    "lightgbm": "4.7.0",
+    "pandas": "3.1.1",
+    "numpy": "2.5.5"
+  },
+  "created": "2026-11-24"
+}
