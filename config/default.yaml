@@ -1,0 +1,137 @@
+# Commit — default configuration.
+#
+# Changes the user makes in the app are saved in the database ("settings" table) and
+# override the values in this file. Every value has a comment explaining it.
+# Values marked "(added in Phase 1)" are not in README section 15 but are needed so that
+# no threshold is hard-coded in the code.
+
+server:
+  port: 8765                    # local server port (127.0.0.1 only) — used from Phase 2
+
+logging:
+  pause_threshold_seconds: 2    # input gap longer than this counts as a pause
+  pause_max_seconds: 60         # (added in Phase 1) gaps this long or longer are breaks, not pauses
+  app_sample_seconds: 5         # how often we check the frontmost app
+
+activity:                       # (added in Phase 1) rules for the activity mode, README 8.3
+  idle_active_seconds: 5        # fewer active seconds than this in a minute = Idle
+  passive_active_seconds: 20    # fewer than this while a video/reading app is in front = Passive
+  passive_categories: [Entertainment, Learning]   # app categories that count as video/reading
+
+calibration:
+  active_minutes: 15            # minutes of normal work used to learn the personal baseline
+
+detection:
+  smoothing_minutes: 5          # condition = most common prediction over this window
+
+load:                           # (added in Phase 1) load score, README 8.5
+  condition_boost: 10           # points added to the load score under Interruptions or Time pressure
+  checkin_window_minutes: 15    # active minutes before a check-in whose scores are compared with the rating
+  refit_days: 7                 # refit the personal calibration this often
+
+dnd:
+  sustained_minutes: 15         # pressure must last this long before asking
+  sustained_fraction: 0.5       # (added in Phase 1) "most of" = more than this share of those minutes
+  duration_minutes: 25          # how long DND stays on
+  ask_cooldown_minutes: 60      # (added in Phase 1) after "Not now" or after DND ends, wait this long before asking again
+  mode: ask                     # ask | auto
+  shortcut_on: "Commit Focus On"
+  shortcut_off: "Commit Focus Off"
+
+breaks:
+  load_threshold: 70            # load score considered "high"
+  window_minutes: 20            # look at the last N active minutes
+  high_fraction: 0.6            # share of minutes that must be high
+  cooldown_minutes: 45          # minimum time between break suggestions
+  break_minutes: 5              # suggested break length
+
+intervention:                   # (added in Phase 1) choosing DND vs break, README 8.7
+  communication_share: 0.3      # if this share of recent time was in Communication apps, it looks like interruptions
+  communication_category: Communication
+
+checkins:
+  enabled: true
+  every_active_minutes: 45
+  min_ratings_for_personal_model: 20
+
+dialogs:                        # (added in Phase 1) README 8.10
+  timeout_seconds: 30           # alert and check-in dialogs close themselves after this
+  onboarding_timeout_seconds: 300   # first-launch dialogs get more time to read
+
+quiet:
+  call_apps: ["zoom.us", "Microsoft Teams", "FaceTime"]   # never interrupt during these
+  call_domains: ["meet.google.com"]   # used once the Chrome extension exists (Phase 2)
+  quiet_hours: []               # e.g. ["22:00-08:00"]
+
+categoriser:
+  mode: local                   # off | rules | local | api
+  categories: [Work, Learning, Communication, Entertainment, Social media, Browsing, Other]
+  ambiguous_domains: [youtube.com, vimeo.com]
+  max_llm_calls_per_hour: 120
+  title_max_chars: 120
+  llm_timeout_seconds: 20       # (added in Phase 2) give up on a model reply after this long
+  heartbeat_max_seconds: 120    # (added in Phase 2) one heartbeat never counts more than this (protects against clock jumps)
+  browser_apps: ["Google Chrome"]   # (added in Phase 2) Chrome in front with no heartbeat = "Miscellaneous" (e.g. incognito)
+  call_domain_max_age_seconds: 90   # (added in Phase 2) a heartbeat this recent tells us which site is in front
+  domain_categories:            # (added in Phase 2) built-in rules for clear domains; user corrections override these
+    docs.google.com: Work
+    drive.google.com: Work
+    sheets.google.com: Work
+    slides.google.com: Work
+    github.com: Work
+    notion.so: Work
+    figma.com: Work
+    overleaf.com: Work
+    mail.google.com: Communication
+    outlook.live.com: Communication
+    outlook.office.com: Communication
+    web.whatsapp.com: Communication
+    slack.com: Communication
+    teams.microsoft.com: Communication
+    meet.google.com: Communication
+    zoom.us: Communication
+    wikipedia.org: Learning
+    coursera.org: Learning
+    khanacademy.org: Learning
+    stackoverflow.com: Learning
+    udemy.com: Learning
+    netflix.com: Entertainment
+    primevideo.com: Entertainment
+    hotstar.com: Entertainment
+    spotify.com: Entertainment
+    twitch.tv: Entertainment
+    instagram.com: Social media
+    facebook.com: Social media
+    x.com: Social media
+    twitter.com: Social media
+    reddit.com: Social media
+    linkedin.com: Social media
+    tiktok.com: Social media
+  local:
+    base_url: "http://127.0.0.1:11434/v1"
+    model: "llama3.2:3b"
+    extra_body:                 # (added in Phase 2) extra request fields; this turns off "thinking" in
+      reasoning_effort: none    # reasoning models (e.g. qwen3) so they answer in about a second
+  api:
+    base_url: "https://api.openai.com/v1"   # any OpenAI-compatible endpoint
+    model: ""                                # user fills in
+    extra_body: {}              # (added in Phase 2) extra request fields for this provider, if it needs any
+
+app_categories:                 # frontmost app -> category (editable)
+  "Visual Studio Code": Work
+  "Code": Work                  # VS Code reports itself as "Code" on macOS
+  "Microsoft Word": Work
+  "Notion": Work
+  "Slack": Communication
+  "Mail": Communication
+  "WhatsApp": Communication
+  "Spotify": Entertainment
+
+report:                         # (added in Phase 2) weekly report, README 9.4
+  weekday: 0                    # day the weekly report is generated (0 = Monday)
+  afternoon_starts_hour: 12     # used for highlights like "Tuesday afternoon"
+  evening_starts_hour: 17
+  top_items: 5                  # how many top apps / domains to list
+
+data:
+  retention_days: 30

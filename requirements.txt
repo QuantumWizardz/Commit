@@ -1,0 +1,43 @@
+# Commit — Python dependencies
+#
+# Phase 0 (ML research). More packages are added in later phases, only when they are used.
+# Versions are pinned so that the model files (.pkl) trained in Phase 0 load correctly in the
+# app later: scikit-learn and lightgbm MUST be the same version in training and in the app.
+
+# --- Data handling ---
+pandas==3.1.1
+numpy==2.5.5
+openpyxl==3.1.5          # reads the SWELL .xlsx files
+
+# --- Machine learning ---
+scikit-learn==1.9.1
+lightgbm==4.7.0
+joblib==1.6.0            # saves / loads the model .pkl files
+shap==0.54.1             # model explanations (Notebook 3)
+scipy==1.18.1            # statistical tests (Notebook 1)
+
+# --- Charts ---
+matplotlib==3.11.2
+
+# --- Notebooks ---
+jupyter==1.1.1
+nbconvert==7.17.2        # lets us run the notebooks from the command line
+ipykernel==7.4.0
+
+# --- Tests ---
+pytest==9.2.0
+
+# --- Phase 1: desktop agent ---
+pynput==1.8.2                                         # keyboard/mouse counts
+pyobjc-framework-Cocoa==13.0; sys_platform == "darwin"  # frontmost app (macOS)
+rumps==0.4.0; sys_platform == "darwin"                # menu-bar icon (macOS)
+PyYAML==6.0.4                                         # reads config/default.yaml
+platformdirs==4.14.8                                  # app-data and log folders
+keyring==25.7.0                                       # OS keychain (API key, P8)
+
+# --- Phase 2: local server, title categoriser, weekly report ---
+fastapi==0.165.0         # local API on 127.0.0.1 for the Chrome extension (and the dashboard in Phase 3)
+uvicorn==0.54.0          # runs the FastAPI app inside the agent process
+requests==2.34.2         # talks to Ollama / the user's OpenAI-compatible API
+reportlab==5.1.0         # weekly report PDF
+httpx==0.28.1            # only for tests (FastAPI's TestClient)

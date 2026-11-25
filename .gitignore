@@ -1,0 +1,23 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data: the SWELL files have their own licence (CC-BY-NC-SA-4.0) and our study data is private
+ml/data/
+
+# Local app database and secrets
+*.db
+.env
+
+# Models trained on private (own study) data — SWELL-only models in shared/models/ are fine to commit
+shared/models/*_private*
+
+# Dashboard build output and packages (rebuild with: cd dashboard && npm install && npm run build)
+dashboard/node_modules/
+dashboard/dist/
+
+# macOS
+.DS_Store
