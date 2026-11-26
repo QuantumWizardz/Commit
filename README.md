@@ -646,7 +646,9 @@ FastAPI on `127.0.0.1` (default port `8765`). Extension requests must include th
 | GET | `/api/week?start=YYYY-MM-DD` | Dashboard | Weekly report data |
 | GET | `/api/report/pdf?start=YYYY-MM-DD` | Dashboard | Download the weekly PDF |
 | GET | `/api/activity` | Dashboard | Time by category, apps, domains |
-| PUT | `/api/domain-rules` | Dashboard | Change a domain's category |
+| PUT | `/api/domain-rules` | Dashboard | Change a domain's category (also re-labels its past time) |
+| GET | `/api/app-categories` | Dashboard | Every app seen or configured, with its category |
+| PUT / DELETE | `/api/app-rules` | Dashboard | Set an app's category (also re-labels its past time) / reset it to the default |
 | GET | `/api/alerts` | Dashboard | Alert history |
 | POST | `/api/alerts/{id}/feedback` | Dashboard | 👍 / 👎 |
 | GET / PUT | `/api/settings` | Dashboard | Read / update settings |
@@ -655,6 +657,8 @@ FastAPI on `127.0.0.1` (default port `8765`). Extension requests must include th
 | POST | `/api/pause` / `/api/resume` | Dashboard | Pause / resume tracking |
 | DELETE | `/api/data` | Dashboard | Delete all data (P9) |
 | GET | `/api/status` | Dashboard, Extension | Is the app running, current state |
+| GET / DELETE | `/api/dev/events?after=ID` | Dashboard (Developer mode) | Live in-memory event log: activity, calibration, predictions, alert decisions, websites, alerts / clear it |
+| GET | `/api/dev/snapshot` | Dashboard (Developer mode) | Live state + latest rows of every table. Both dev routes answer 403 unless Settings → Developer mode is on |
 
 ---
 

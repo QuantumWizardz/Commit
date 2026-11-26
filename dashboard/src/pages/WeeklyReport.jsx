@@ -4,6 +4,7 @@ import { useState } from "react";
 import { downloadWeeklyPdf } from "../api.js";
 import { BarList, DayColumns } from "../components/Charts.jsx";
 import StatCard from "../components/StatCard.jsx";
+import CategoryBreakdown from "../components/CategoryBreakdown.jsx";
 import { useLoad } from "../components/useLoad.js";
 import WeekNav from "../components/WeekNav.jsx";
 import { CONDITION_LABELS, formatMinutes, lastSevenDaysStart } from "../format.js";
@@ -52,7 +53,7 @@ function AlertSummary({ alerts }) {
 export default function WeeklyReport() {
   const [start, setStart] = useState(lastSevenDaysStart());
   const [downloadError, setDownloadError] = useState(null);
-  const { data, error } = useLoad(`/api/week?start=${start}`);
+  const { data, error, reload } = useLoad(`/api/week?start=${start}`);
   if (error) return <div className="banner">{error}</div>;
   if (!data) return <p className="empty">Loading…</p>;
 
@@ -106,7 +107,12 @@ export default function WeeklyReport() {
       </div>
 
       <div className="grid two">
-        <div className="card"><h2>Time by category</h2><BarList items={data.categories} /></div>
+        <div className="card">
+          <h2>Time by category</h2>
+          <CategoryBreakdown items={data.categories} itemsByCategory={data.category_items}
+                             categories={data.categories_available} onChanged={reload} />
+          <p className="label" style={{ marginTop: 10 }}>Click a category to see and change what is in it.</p>
+        </div>
         <div className="card">
           <h2>Average load by day</h2>
           <DayColumns days={loadDays} format={(score) => String(Math.round(score))} maximum={100} />

@@ -243,3 +243,71 @@ def test_settings_validation(client, body):
 def test_api_mode_requires_consent(client):
     response = client.put("/api/settings", json={"categoriser_mode": "api"})
     assert response.status_code == 400 and "switch 4" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------- app categories
+
+def test_app_categories_list_set_and_reset(client, storage):
+    now = int(time.time())
+    storage.save_app_time(now - 120, {"‎WhatsApp": 600, "Brave Browser": 300, "osascript": 60},
+                          {"‎WhatsApp": "Other", "Brave Browser": "Other", "osascript": "Other"})
+
+    listed = client.get("/api/app-categories").json()
+    names = [app["name"] for app in listed["apps"]]
+    assert names[:2] == ["‎WhatsApp", "Brave Browser"]           # most-used first, exact names kept
+    assert "osascript" not in names                                   # Commit's own helper apps are hidden
+    assert "Code" in names and "Communication" in listed["categories"]  # configured apps are listed too
+
+    # Set: the exact (invisible-character) name works, and past time is re-labelled.
+    changed = client.put("/api/app-rules", json={"app": "‎WhatsApp", "category": "Communication"}).json()
+    whatsapp = next(app for app in changed["apps"] if app["name"] == "‎WhatsApp")
+    assert whatsapp["category"] == "Communication" and whatsapp["custom"] is True
+    assert storage.execute("SELECT category FROM app_time WHERE app_name = ?", ("‎WhatsApp",)) == [("Communication",)]
+    activity = client.get("/api/activity").json()
+    assert {"name": "‎WhatsApp", "minutes": 10, "category": "Communication"} in activity["top_apps"]
+    assert all(app["name"] != "osascript" for app in activity["top_apps"])
+
+    # A built-in app changed and reset goes back to its default; an unknown app goes back to Other.
+    client.put("/api/app-rules", json={"app": "Code", "category": "Entertainment"})
+    reset = client.request("DELETE", "/api/app-rules", json={"app": "Code"}).json()
+    assert next(app for app in reset["apps"] if app["name"] == "Code") == {"name": "Code", "category": "Work", "minutes": 0, "custom": False}
+    client.request("DELETE", "/api/app-rules", json={"app": "‎WhatsApp"})
+    assert storage.execute("SELECT category FROM app_time WHERE app_name = ?", ("‎WhatsApp",)) == [("Other",)]
+
+
+def test_app_rule_validation(client):
+    assert client.put("/api/app-rules", json={"app": "Code", "category": "Nonsense"}).status_code == 400
+    assert client.put("/api/app-rules", json={"app": "", "category": "Work"}).status_code == 422
+    assert client.put("/api/app-rules", json={"app": "   ", "category": "Work"}).status_code == 400
+
+
+def test_commit_heartbeat_is_accepted(client, parts, storage):
+    assert client.post("/api/web/heartbeat", json={"category": "Commit", "seconds": 30}).status_code == 202
+    parts["heartbeats"].process_pending()
+    assert storage.execute("SELECT COUNT(*) FROM web_time")[0][0] == 0
+
+
+def test_time_by_category_breakdown_and_changing_from_it(client, storage):
+    now = int(time.time())
+    storage.save_app_time(now - 120, {"Microsoft PowerPoint": 600, "loginwindow": 3000, "osascript": 60, "Brave Browser": 300},
+                          {"Microsoft PowerPoint": "Other", "loginwindow": "Other", "osascript": "Other", "Brave Browser": "Other"})
+    storage.save_web_time(now - 120, "reddit.com", "Social media", 120)
+    storage.save_web_time(now - 120, None, "Private", 60)
+
+    for path in ["/api/activity", "/api/week"]:
+        data = client.get(path).json()
+        assert {"name": "Other", "minutes": 10} in data["categories"]            # lock screen and helpers left out
+        assert data["category_items"]["Other"] == [{"kind": "app", "name": "Microsoft PowerPoint", "minutes": 10}]
+        assert data["category_items"]["Social media"] == [{"kind": "website", "name": "reddit.com", "minutes": 2}]
+        assert data["category_items"]["Private"] == [{"kind": "unnamed", "name": "Private", "minutes": 1}]
+        assert "Work" in data["categories_available"]
+        assert all(app["name"] != "loginwindow" for app in data["top_apps"])
+    assert "loginwindow" not in [app["name"] for app in client.get("/api/app-categories").json()["apps"]]
+
+    # Changing from the breakdown moves past time: apps and websites.
+    client.put("/api/app-rules", json={"app": "Microsoft PowerPoint", "category": "Work"})
+    client.put("/api/domain-rules", json={"domain": "reddit.com", "category": "Learning"})
+    items = client.get("/api/activity").json()["category_items"]
+    assert items["Work"] == [{"kind": "app", "name": "Microsoft PowerPoint", "minutes": 10}]
+    assert items["Learning"] == [{"kind": "website", "name": "reddit.com", "minutes": 2}]
+    assert "Other" not in items and "Social media" not in items

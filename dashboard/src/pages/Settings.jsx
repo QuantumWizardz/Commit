@@ -5,6 +5,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useLoad } from "../components/useLoad.js";
+import { formatMinutes } from "../format.js";
+
+const SETTINGS_CHANGED_EVENT = "commit:settings-changed";   // App.jsx listens and refreshes the sidebar
 
 const CATEGORISER_MODES = [
   { id: "off", label: "Off" },
@@ -225,6 +228,69 @@ function QuietHoursSection({ settings, save }) {
   );
 }
 
+function AppCategoriesSection({ retentionDays }) {
+  const [data, setData] = useState(null);
+  const [newApp, setNewApp] = useState("");
+  const [newCategory, setNewCategory] = useState("Work");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    api("GET", "/api/app-categories").then(setData).catch((problem) => setMessage(problem.message));
+  }, []);
+
+  async function change(method, body, done) {
+    try {
+      setData(await api(method, "/api/app-rules", body));
+      setMessage(done);
+    } catch (problem) {
+      setMessage(problem.message);
+    }
+  }
+
+  return (
+    <Section title="App categories">
+      <p className="label">Which category each app counts as (apps not listed count as Other). A change applies from the next minute
+        and re-labels that app's past time too. Browsers are split by website instead.</p>
+      {!data ? <p className="empty">Loading…</p> : (
+        <div className="table-scroll" style={{ maxHeight: 360, overflowY: "auto" }}>
+          <table>
+            <thead><tr><th>App</th><th>Last {retentionDays} days</th><th>Category</th><th /></tr></thead>
+            <tbody>
+              {data.apps.map((app) => (
+                <tr key={app.name}>
+                  <td>{app.name}</td>
+                  <td>{formatMinutes(app.minutes)}</td>
+                  <td>
+                    <select value={app.category} aria-label={`Category for ${app.name}`}
+                      onChange={(event) => change("PUT", { app: app.name, category: event.target.value }, `${app.name} → ${event.target.value}.`)}>
+                      {data.categories.map((category) => <option key={category}>{category}</option>)}
+                    </select>
+                  </td>
+                  <td>{app.custom && (
+                    <button className="button small secondary" onClick={() => change("DELETE", { app: app.name }, `${app.name} reset.`)}>Reset</button>
+                  )}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data && (
+        <div className="row">
+          <input type="text" value={newApp} onChange={(event) => setNewApp(event.target.value)} placeholder="App name, e.g. Xcode"
+            aria-label="App name" style={{ flex: 1, minWidth: 140 }} />
+          <select value={newCategory} onChange={(event) => setNewCategory(event.target.value)} aria-label="Category for the new app">
+            {data.categories.map((category) => <option key={category}>{category}</option>)}
+          </select>
+          <button className="button" disabled={!newApp.trim()}
+            onClick={() => change("PUT", { app: newApp.trim(), category: newCategory }, `${newApp.trim()} → ${newCategory}.`).then(() => setNewApp(""))}>Add</button>
+        </div>
+      )}
+      <Status message={message} />
+    </Section>
+  );
+}
+
 function PrivateSitesSection() {
   const [domains, setDomains] = useState([]);
   const [input, setInput] = useState("");
@@ -357,6 +423,19 @@ function DataSection({ settings, save, reload }) {
   );
 }
 
+function DeveloperSection({ settings, save }) {
+  return (
+    <Section title="Developer mode">
+      <label className="switch">
+        <input type="checkbox" checked={Boolean(settings.developer_mode)} onChange={() => save({ developer_mode: !settings.developer_mode })} />
+        <span>Show the Developer page: a live log of every tracked minute, prediction, alert decision and website, plus the raw database rows.</span>
+      </label>
+      <p className="label">The log is kept only in Commit's memory (never titles, URLs or what you type) and is cleared when you turn this off.
+        {settings.developer_mode && <> <a href="#/developer">Open the Developer page →</a></>}</p>
+    </Section>
+  );
+}
+
 function ConsentSection({ settings, save }) {
   const consent = settings.consent;
   if (!consent) return null;
@@ -389,6 +468,7 @@ export default function Settings() {
     try {
       setSettings(await api("PUT", "/api/settings", changes));
       setMessage("Saved.");
+      window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
     } catch (problem) {
       setMessage(problem.message);
     }
@@ -407,6 +487,7 @@ export default function Settings() {
           <DndSection settings={settings} save={save} />
           <CheckinSection settings={settings} save={save} />
           <QuietHoursSection settings={settings} save={save} />
+          <AppCategoriesSection retentionDays={settings.retention_days} />
         </div>
         <div className="stack" style={{ gap: 16 }}>
           <PrivateSitesSection />
@@ -414,6 +495,7 @@ export default function Settings() {
           <CalibrationSection settings={settings} reload={reload} />
           <DataSection settings={settings} save={save} reload={reload} />
           <ConsentSection settings={settings} save={save} />
+          <DeveloperSection settings={settings} save={save} />
         </div>
       </div>
     </>

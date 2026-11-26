@@ -39,10 +39,12 @@ def category_for_app(app_name: str | None, app_categories: dict[str, str]) -> st
 class AppTracker:
     """Samples the frontmost app on a background thread and summarises it per minute."""
 
-    def __init__(self, get_frontmost_app: Callable[[], str | None], sample_seconds: float, app_categories: dict[str, str]):
+    def __init__(self, get_frontmost_app: Callable[[], str | None], sample_seconds: float,
+                 app_categories: dict[str, str] | Callable[[], dict[str, str]]):
         """
         In:  a function returning the frontmost app name (platform layer, or a fake in tests),
-             seconds between samples, and the app → category table.
+             seconds between samples, and the app → category table — or a function returning it,
+             so changes made on the dashboard apply from the next minute.
         """
         self.get_frontmost_app = get_frontmost_app
         self.sample_seconds = sample_seconds
@@ -77,6 +79,7 @@ class AppTracker:
 
         Out: {"app_switches", "app_seconds", "main_app", "main_category", "app_categories"}.
         """
+        table = self.app_categories() if callable(self.app_categories) else self.app_categories
         with self.lock:
             app_seconds = dict(self.app_seconds)
             main_app = max(app_seconds, key=app_seconds.get) if app_seconds else self.current_app
@@ -84,8 +87,8 @@ class AppTracker:
                 "app_switches": self.app_switches,
                 "app_seconds": {name: int(seconds) for name, seconds in app_seconds.items()},
                 "main_app": main_app,
-                "main_category": category_for_app(main_app, self.app_categories),
-                "app_categories": {name: category_for_app(name, self.app_categories) for name in app_seconds},
+                "main_category": category_for_app(main_app, table),
+                "app_categories": {name: category_for_app(name, table) for name in app_seconds},
             }
             self.reset_minute()
             return summary

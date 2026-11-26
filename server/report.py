@@ -117,20 +117,28 @@ def time_summary(storage, config, begin: int, end: int, top_items: int | None = 
 
     In:  storage, config, the time range, how many top apps/domains to list (None = report.top_items).
     Out: dict; each top domain also has its main category (for "edit a domain's category").
+         "category_items" = {category: [{"kind": "app"|"website"|"unnamed", "name", "minutes"}]},
+         what makes up each category (the dashboard lets the user re-categorise from there).
     """
     browser_apps = config.get("categoriser.browser_apps")
+    # Never counted, also in rows saved before these lists existed: Commit's own dialogs and the lock screen.
+    skipped_apps = set(config.get("activity.commit_apps")) | set(config.get("activity.ignored_apps"))
     top_items = top_items or config.get("report.top_items")
     by_category: Counter = Counter()
     by_app: Counter = Counter()
     by_domain: Counter = Counter()
     domain_categories: dict[str, Counter] = defaultdict(Counter)
+    parts: dict[str, Counter] = defaultdict(Counter)     # category -> {(kind, name): seconds}
 
     for app_name, category, seconds in storage.execute(
         "SELECT app_name, category, seconds FROM app_time WHERE ts >= ? AND ts < ?", (begin, end)
     ):
+        if app_name in skipped_apps:
+            continue
         by_app[app_name] += seconds
         if app_name not in browser_apps:      # browser time is split by website below
             by_category[category or "Other"] += seconds
+            parts[category or "Other"][("app", app_name)] += seconds
 
     private_seconds = 0
     for domain, category, seconds in storage.execute(
@@ -140,8 +148,11 @@ def time_summary(storage, config, begin: int, end: int, top_items: int | None = 
         if domain is not None:
             by_domain[domain] += seconds
             domain_categories[domain][category] += seconds
-        elif category == "Private":
-            private_seconds += seconds
+            parts[category][("website", domain)] += seconds
+        else:
+            parts[category][("unnamed", category)] += seconds   # private / no-detail time: never a name
+            if category == "Private":
+                private_seconds += seconds
 
     def as_minutes(counter: Counter, limit: int | None = None) -> list[dict]:
         return [{"name": name, "minutes": round(seconds / SECONDS_PER_MINUTE)} for name, seconds in counter.most_common(limit)]
@@ -150,8 +161,15 @@ def time_summary(storage, config, begin: int, end: int, top_items: int | None = 
     for item in top_domains:
         item["category"] = domain_categories[item["name"]].most_common(1)[0][0]
 
+    category_items = {
+        category: [{"kind": kind, "name": name, "minutes": round(seconds / SECONDS_PER_MINUTE)}
+                   for (kind, name), seconds in counter.most_common()]
+        for category, counter in parts.items()
+    }
+
     return {
         "categories": as_minutes(by_category),
+        "category_items": category_items,
         "top_apps": as_minutes(by_app, top_items),
         "top_domains": top_domains,
         "private_minutes": round(private_seconds / SECONDS_PER_MINUTE),

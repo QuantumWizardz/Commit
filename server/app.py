@@ -13,12 +13,20 @@ Dashboard routes (Phase 3)
   GET    /api/week?start=…        weekly report data          GET /api/report/pdf?start=…  PDF
   GET    /api/activity?start=…    categories, apps, domains, day-by-day
   PUT    /api/domain-rules        {domain, category} user correction → rule for the future
+  GET    /api/app-categories      every app seen or configured, with its category
+  PUT    /api/app-rules           {app, category} set an app's category (also re-labels its past time)
+  DELETE /api/app-rules           {app} back to the default category
   GET    /api/alerts              alert history               POST /api/alerts/{id}/feedback  👍/👎
   GET    /api/settings            all settings                PUT  /api/settings  change some
   POST   /api/llm/test            test the language-model connection
   POST   /api/calibration/restart re-run calibration
   POST   /api/pause, /api/resume  pause / resume tracking (P10)
   DELETE /api/data                delete all my data (P9)
+
+Developer mode (only while Settings → Developer mode is on; otherwise 403)
+  GET    /api/dev/events?after=…  live event log (activity, predictions, decisions, websites, alerts)
+  DELETE /api/dev/events          clear the event log
+  GET    /api/dev/snapshot        live state + the latest rows of every tracked table
   GET    /                        the dashboard itself (dashboard/dist)
 
 Security: every /api request must carry the pairing token in the X-Commit-Token header.
@@ -30,6 +38,7 @@ which blocks "DNS rebinding" tricks by other websites. No CORS headers are ever 
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 import secrets
@@ -48,7 +57,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from server import report
-from server.categoriser import SPECIAL_CATEGORIES, HeartbeatProcessor, TitleCategoriser, normalise_domain
+from server.categoriser import COMMIT, SPECIAL_CATEGORIES, HeartbeatProcessor, TitleCategoriser, normalise_domain
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +76,11 @@ RECENT_ALERTS_ON_HOME = 5
 ALERT_HISTORY_LIMIT = 200
 ACTIVITY_TOP_ITEMS = 20                 # the Activity page lists more domains than the PDF
 OPTIONAL_CONSENTS = ("website_tracking", "title_local", "title_api", "checkins")
+DEVELOPER_MODE_KEY = "developer_mode"   # same key as agent/devlog.py
+DEV_SNAPSHOT_ROWS = 60                  # latest rows per table on the Developer page
+UNKNOWN_APP_CATEGORY = "Other"          # same as agent/app_tracker.py
+SECONDS_PER_DAY = 24 * 60 * 60
+DEV_CONFIG_SECTIONS = ("activity", "calibration", "detection", "load", "dnd", "breaks", "intervention", "checkins", "quiet")
 NO_THINKING = {"reasoning_effort": "none"}   # turns off "thinking" in reasoning models (e.g. Qwen 3)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -94,6 +108,7 @@ class ServerContext:
 
     agent:    object with status() -> dict, set_paused(bool), restart_calibration(), delete_all_data()
     keychain: object with get_api_key(), set_api_key(key), delete_api_key()   (agent/keychain.py)
+    dev_log:  the Developer mode DevLog (agent/devlog.py), or None
     """
     storage: object
     config: object
@@ -101,6 +116,7 @@ class ServerContext:
     heartbeats: HeartbeatProcessor
     agent: object
     keychain: object
+    dev_log: object = None
 
 
 # ---------------------------------------------------------------- request bodies
@@ -119,6 +135,15 @@ class DomainBody(BaseModel):
 class DomainRule(BaseModel):
     domain: str = Field(max_length=253)
     category: str
+
+
+class AppRule(BaseModel):
+    app: str = Field(min_length=1, max_length=200)     # exact name as macOS reports it (not trimmed)
+    category: str
+
+
+class AppBody(BaseModel):
+    app: str = Field(min_length=1, max_length=200)
 
 
 class FeedbackBody(BaseModel):
@@ -144,6 +169,7 @@ class SettingsUpdate(BaseModel):
     quiet_hours: list[str] | None = None
     retention_days: int | None = Field(default=None, ge=1, le=365)
     consent: dict[str, bool] | None = None
+    developer_mode: bool | None = None
 
 
 # ---------------------------------------------------------------- small helpers
@@ -154,6 +180,33 @@ def clean_domain(raw: str) -> str:
     if not DOMAIN_PATTERN.match(domain):
         raise HTTPException(status_code=400, detail="That does not look like a website domain (example: bank.com).")
     return domain
+
+
+def default_app_category(config, app: str) -> str:
+    """The built-in category of an app (from config/default.yaml), or "Other"."""
+    return config.defaults.get("app_categories", {}).get(app, UNKNOWN_APP_CATEGORY)
+
+
+def app_category_list(context: "ServerContext") -> dict:
+    """
+    Every app the user may want to categorise: apps seen in the kept data plus apps in the table.
+    Commit's own helper apps and the lock screen are left out (they are never counted).
+
+    Out: {"apps": [{"name", "category", "minutes", "custom"}], "categories": [...]}, most-used first.
+    """
+    storage, config = context.storage, context.config
+    table = config.get("app_categories")
+    since = int(time.time()) - config.get("data.retention_days") * SECONDS_PER_DAY
+    seconds = storage.app_seconds_since(since)
+    hidden = set(config.get("activity.commit_apps")) | set(config.get("activity.ignored_apps"))
+    names = (set(seconds) | set(table)) - hidden
+    apps = [{"name": name,
+             "category": table.get(name, UNKNOWN_APP_CATEGORY),
+             "minutes": round(seconds.get(name, 0) / 60),
+             "custom": table.get(name, UNKNOWN_APP_CATEGORY) != default_app_category(config, name)}
+            for name in names if name.strip()]
+    apps.sort(key=lambda app: (-app["minutes"], app["name"].lower()))
+    return {"apps": apps, "categories": config.get("categoriser.categories")}
 
 
 def parse_start(start: str | None) -> date:
@@ -197,6 +250,7 @@ def read_settings(context: ServerContext) -> dict:
         "calibration": status.get("calibration"),
         "consent": storage.get_setting(CONSENT_KEY),
         "categories": config.get("categoriser.categories"),
+        "developer_mode": bool(storage.get_setting(DEVELOPER_MODE_KEY, False)),
     }
 
 
@@ -273,6 +327,56 @@ def apply_settings(context: ServerContext, update: SettingsUpdate) -> None:
         config.set("quiet.quiet_hours", update.quiet_hours)
     if update.retention_days is not None:
         config.set("data.retention_days", update.retention_days)
+    if update.developer_mode is not None:
+        storage.set_setting(DEVELOPER_MODE_KEY, update.developer_mode)
+        if context.dev_log is not None:
+            if update.developer_mode:
+                context.dev_log.add("system", "Developer mode turned on")
+            else:
+                context.dev_log.clear()        # nothing stays in memory once developer mode is off
+
+
+# ---------------------------------------------------------------- developer mode
+
+def latest_rows(storage, sql: str, columns: list[str], json_columns: tuple = ()) -> list[dict]:
+    """Run a SELECT and return dicts (newest first), parsing the JSON columns."""
+    rows = []
+    for values in storage.execute(sql, (DEV_SNAPSHOT_ROWS,)):
+        row = dict(zip(columns, values))
+        for column in json_columns:
+            row[column] = json.loads(row[column]) if row[column] else None
+        rows.append(row)
+    return rows
+
+
+def developer_snapshot(context: ServerContext) -> dict:
+    """
+    Everything the Developer page shows besides the event log: live agent state, the rules'
+    settings, and the latest rows of every tracked table (the same data the database holds).
+    """
+    storage = context.storage
+    counts = {table: storage.execute(f"SELECT COUNT(*) FROM {table}")[0][0]
+              for table in ("minutes", "app_time", "web_time", "alerts", "checkins", "title_cache", "domain_rules", "private_domains")}
+    return {
+        "now": time.time(),
+        "status": context.agent.status(),
+        "decision_state": storage.get_setting("decision_state"),
+        "baseline": storage.get_setting("baseline"),
+        "categoriser_mode": context.categoriser.effective_mode(),
+        "rules": {section: context.config.get(section) for section in DEV_CONFIG_SECTIONS},
+        "row_counts": counts,
+        "minutes": latest_rows(storage, "SELECT ts, mode, app_category, features_json, condition, condition_probs, load_score "
+                                        "FROM minutes ORDER BY ts DESC LIMIT ?",
+                               ["ts", "mode", "app_category", "features", "condition", "condition_probs", "load_score"],
+                               ("features", "condition_probs")),
+        "app_time": latest_rows(storage, "SELECT ts, app_name, category, seconds FROM app_time ORDER BY ts DESC, rowid DESC LIMIT ?",
+                                ["ts", "app_name", "category", "seconds"]),
+        "web_time": latest_rows(storage, "SELECT ts, domain, category, seconds FROM web_time ORDER BY ts DESC, rowid DESC LIMIT ?",
+                                ["ts", "domain", "category", "seconds"]),
+        "alerts": latest_rows(storage, "SELECT id, ts, kind, reason, action, feedback FROM alerts ORDER BY ts DESC LIMIT ?",
+                              ["id", "ts", "kind", "reason", "action", "feedback"]),
+        "checkins": latest_rows(storage, "SELECT ts, rating FROM checkins ORDER BY ts DESC LIMIT ?", ["ts", "rating"]),
+    }
 
 
 # ---------------------------------------------------------------- dashboard page
@@ -295,8 +399,8 @@ def add_extension_routes(app: FastAPI, context: ServerContext, protected: list) 
     @app.post("/api/web/heartbeat", dependencies=protected, status_code=202)
     def web_heartbeat(heartbeat: Heartbeat) -> dict:
         """Queue one heartbeat; it is categorised in the background (never blocks)."""
-        if heartbeat.category is not None and heartbeat.category not in SPECIAL_CATEGORIES:
-            raise bad_request("category may only be Private or Other.")
+        if heartbeat.category is not None and heartbeat.category not in SPECIAL_CATEGORIES + (COMMIT,):
+            raise bad_request("category may only be Private, Other or Commit.")
         accepted = context.heartbeats.submit(heartbeat.domain, heartbeat.title, heartbeat.category, heartbeat.seconds)
         return {"accepted": accepted}
 
@@ -334,7 +438,8 @@ def add_report_routes(app: FastAPI, context: ServerContext, protected: list) -> 
 
     @app.get("/api/week", dependencies=protected)
     def week(start: str | None = Query(default=None)) -> dict:
-        return report.build_week_report(storage, config, parse_start(start))
+        return {**report.build_week_report(storage, config, parse_start(start)),
+                "categories_available": config.get("categoriser.categories")}
 
     @app.get("/api/report/pdf", dependencies=protected)
     def week_pdf(start: str | None = Query(default=None)) -> Response:
@@ -348,11 +453,15 @@ def add_report_routes(app: FastAPI, context: ServerContext, protected: list) -> 
         first_day = parse_start(start)
         begin, end = report.week_bounds(first_day)
         days = [first_day + timedelta(days=offset) for offset in range(DAYS_IN_WEEK)]
+        summary = report.time_summary(storage, config, begin, end, ACTIVITY_TOP_ITEMS)
+        table = config.get("app_categories")
+        for item in summary["top_apps"]:
+            item["category"] = table.get(item["name"], UNKNOWN_APP_CATEGORY)
         return {
             "start": first_day.isoformat(),
             "end": (first_day + timedelta(days=DAYS_IN_WEEK - 1)).isoformat(),
             "daily": report.minutes_summary(storage, begin, end, days)["daily"],
-            **report.time_summary(storage, config, begin, end, ACTIVITY_TOP_ITEMS),
+            **summary,
             "categories_available": config.get("categoriser.categories"),
         }
 
@@ -363,7 +472,39 @@ def add_report_routes(app: FastAPI, context: ServerContext, protected: list) -> 
             raise bad_request(f"category must be one of {allowed}")
         domain = clean_domain(rule.domain)
         storage.set_domain_rule(domain, rule.category)
+        storage.set_domain_category(domain, rule.category)   # past time moves too, like apps
         return {"domain": domain, "category": rule.category}
+
+    @app.get("/api/app-categories", dependencies=protected)
+    def app_categories() -> dict:
+        return app_category_list(context)
+
+    @app.put("/api/app-rules", dependencies=protected)
+    def set_app_rule(rule: AppRule) -> dict:
+        """Set an app's category: used from the next minute, and past time of that app is re-labelled."""
+        allowed = config.get("categoriser.categories")
+        if rule.category not in allowed:
+            raise bad_request(f"category must be one of {allowed}")
+        if not rule.app.strip():
+            raise bad_request("App name is empty.")
+        table = config.get("app_categories")
+        table[rule.app] = rule.category
+        config.set("app_categories", table)
+        storage.set_app_category(rule.app, rule.category)
+        return app_category_list(context)
+
+    @app.delete("/api/app-rules", dependencies=protected)
+    def reset_app_rule(body: AppBody) -> dict:
+        """Back to the built-in category (or "Other" for apps without one)."""
+        table = config.get("app_categories")
+        default = default_app_category(config, body.app)
+        if body.app in config.defaults.get("app_categories", {}):
+            table[body.app] = default
+        else:
+            table.pop(body.app, None)
+        config.set("app_categories", table)
+        storage.set_app_category(body.app, default)
+        return app_category_list(context)
 
 
 def add_control_routes(app: FastAPI, context: ServerContext, protected: list) -> None:
@@ -416,6 +557,33 @@ def add_control_routes(app: FastAPI, context: ServerContext, protected: list) ->
         return {"deleted": True}
 
 
+def add_developer_routes(app: FastAPI, context: ServerContext, protected: list) -> None:
+    """Developer mode: live event log and table snapshot. Refused (403) while developer mode is off."""
+    storage = context.storage
+
+    def require_developer_mode() -> None:
+        if not storage.get_setting(DEVELOPER_MODE_KEY, False):
+            raise HTTPException(status_code=403, detail="Developer mode is off. Turn it on in Settings → Developer mode.")
+
+    developer = protected + [Depends(require_developer_mode)]
+
+    @app.get("/api/dev/events", dependencies=developer)
+    def dev_events(after: int = Query(default=0, ge=0)) -> dict:
+        if context.dev_log is None:
+            return {"events": [], "last_id": 0}
+        return {"events": context.dev_log.since(after), "last_id": context.dev_log.last_id()}
+
+    @app.delete("/api/dev/events", dependencies=developer)
+    def clear_dev_events() -> dict:
+        if context.dev_log is not None:
+            context.dev_log.clear()
+        return {"cleared": True}
+
+    @app.get("/api/dev/snapshot", dependencies=developer)
+    def dev_snapshot() -> dict:
+        return developer_snapshot(context)
+
+
 def create_app(context: ServerContext) -> FastAPI:
     """
     Build the FastAPI app.
@@ -437,6 +605,7 @@ def create_app(context: ServerContext) -> FastAPI:
     add_extension_routes(app, context, protected)
     add_report_routes(app, context, protected)
     add_control_routes(app, context, protected)
+    add_developer_routes(app, context, protected)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:

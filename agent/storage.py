@@ -190,6 +190,18 @@ class Storage:
             (domain, category),
         )
 
+    def set_app_category(self, app_name: str, category: str) -> None:
+        """Re-label all saved time of one app (the user changed its category on the dashboard)."""
+        self.execute("UPDATE app_time SET category = ? WHERE app_name = ?", (category, app_name))
+
+    def set_domain_category(self, domain: str, category: str) -> None:
+        """Re-label all saved time on one website (the user changed its category on the dashboard)."""
+        self.execute("UPDATE web_time SET category = ? WHERE domain = ?", (category, domain))
+
+    def app_seconds_since(self, start_ts: int) -> dict[str, int]:
+        """{app name: total seconds} since `start_ts`."""
+        return dict(self.execute("SELECT app_name, SUM(seconds) FROM app_time WHERE ts >= ? GROUP BY app_name", (start_ts,)))
+
     def private_domains(self) -> list[str]:
         """The user's "Don't track" list, sorted."""
         return [row[0] for row in self.execute("SELECT domain FROM private_domains ORDER BY domain")]

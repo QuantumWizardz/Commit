@@ -32,10 +32,11 @@ Vite serves the page on `http://localhost:5173` and forwards `/api` to the runni
 | `src/styles.css` | The whole design system (README 10.3) |
 | `src/components/` | `Sidebar`, `StatCard`, `Charts` (bars, day columns, timeline), `AlertList` (with 👍/👎), `WeekNav`, `useLoad` (loads API data) |
 | `src/pages/Home.jsx` | Stat cards, today's timeline, recent alerts |
-| `src/pages/Activity.jsx` | Time by category, top apps, top websites (change a site's category), active time per day |
+| `src/pages/Activity.jsx` | Time by category, top apps and top websites (change an app's or a site's category), active time per day |
 | `src/pages/WeeklyReport.jsx` | The weekly report as cards + Download PDF |
 | `src/pages/Alerts.jsx` | All DND/break suggestions with reason, action and feedback |
-| `src/pages/Settings.jsx` | Name, website categories (local AI / your API key, test connection), DND mode, check-ins, quiet hours, private websites, pairing token, calibration, retention, pause, delete all data, consent |
+| `src/pages/Settings.jsx` | Name, website categories (local AI / your API key, test connection), DND mode, check-ins, quiet hours, private websites, pairing token, calibration, retention, pause, delete all data, consent, app categories (all apps, add / reset), developer mode switch |
+| `src/pages/Developer.jsx` | Developer mode only: live event log (activity, calibration, predictions, alert decisions, websites, alerts) with filters, search and Download log; alert-rule state; latest rows of every database table |
 
 ## Design
 Warm grey page (`#E8E6E1`), white panels with large rounded corners, black pill for the active navigation item
