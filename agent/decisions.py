@@ -170,6 +170,49 @@ def decide(recent: list[dict], now: float, now_local: datetime, state: DecisionS
     return None
 
 
+def explain(recent: list[dict], now: float, now_local: datetime, state: DecisionState, config, frontmost_app: str | None, current_domain: str | None = None) -> dict:
+    """
+    Every check that decide() looks at, for the Developer page (same inputs as decide()).
+
+    Out: {"in_call", "quiet_hours", "pressure_sustained", "pressured_minutes", "load_high", "high_load_minutes",
+          "window_minutes", "dnd_on", "dnd_blocked_seconds", "break_blocked_seconds", "reason"}
+         where "reason" is a short sentence on why an alert was or was not suggested.
+    """
+    sustained_minutes = config.get("dnd.sustained_minutes")
+    window = config.get("breaks.window_minutes")
+    threshold = config.get("breaks.load_threshold")
+    checks = {
+        "in_call": in_call(frontmost_app, config.get("quiet.call_apps"), current_domain, config.get("quiet.call_domains")),
+        "quiet_hours": in_quiet_hours(now_local, config.get("quiet.quiet_hours")),
+        "pressure_sustained": pressure_is_sustained(recent, sustained_minutes, config.get("dnd.sustained_fraction")),
+        "pressured_minutes": f"{sum(1 for m in recent[-sustained_minutes:] if m['condition'] in PRESSURE_CONDITIONS)}/{sustained_minutes}",
+        "load_high": load_is_sustained_high(recent, window, threshold, config.get("breaks.high_fraction")),
+        "high_load_minutes": f"{sum(1 for m in recent[-window:] if m['load_score'] is not None and m['load_score'] > threshold)}/{window}",
+        "window_minutes": len(recent),
+        "dnd_on": now < state.dnd_on_until,
+        "dnd_blocked_seconds": max(0, round(state.dnd_ask_blocked_until - now)),
+        "break_blocked_seconds": max(0, round(state.break_blocked_until - now)),
+    }
+    if checks["in_call"]:
+        reason = "never interrupt: a call is in front"
+    elif checks["quiet_hours"]:
+        reason = "never interrupt: quiet hours"
+    elif checks["pressure_sustained"] and checks["dnd_on"]:
+        reason = "pressure is sustained but DND is already on"
+    elif checks["pressure_sustained"] and checks["dnd_blocked_seconds"]:
+        reason = f"pressure is sustained but DND is in cooldown for {checks['dnd_blocked_seconds']} s"
+    elif checks["load_high"] and checks["break_blocked_seconds"]:
+        reason = f"load is high but breaks are in cooldown/snooze for {checks['break_blocked_seconds']} s"
+    elif checks["pressure_sustained"] or checks["load_high"]:
+        reason = "rules met"
+    elif len(recent) < min(sustained_minutes, window):
+        reason = f"not enough history yet ({len(recent)} active minutes)"
+    else:
+        reason = "no sustained pressure or high load"
+    checks["reason"] = reason
+    return checks
+
+
 # ---------------------------------------------------------------- updating the state after an alert
 
 def after_dnd_answer(state: DecisionState, action: str, now: float, config) -> DecisionState:

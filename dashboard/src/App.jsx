@@ -7,11 +7,13 @@ import { useLoad } from "./components/useLoad.js";
 import { greeting } from "./format.js";
 import Activity from "./pages/Activity.jsx";
 import Alerts from "./pages/Alerts.jsx";
+import Developer from "./pages/Developer.jsx";
 import Home from "./pages/Home.jsx";
 import Settings from "./pages/Settings.jsx";
 import WeeklyReport from "./pages/WeeklyReport.jsx";
 
-const SCREENS = { home: Home, activity: Activity, report: WeeklyReport, alerts: Alerts, settings: Settings };
+const SCREENS = { home: Home, activity: Activity, report: WeeklyReport, alerts: Alerts, settings: Settings, developer: Developer };
+const SETTINGS_CHANGED_EVENT = "commit:settings-changed";   // sent by the Settings page after each save
 const STATUS_REFRESH_SECONDS = 15;
 
 /** The page id from the address, e.g. "#/activity" -> "activity" (Home if unknown). */
@@ -24,7 +26,13 @@ export default function App() {
   const [page, setPage] = useState(pageFromHash());
   const [downloadError, setDownloadError] = useState(null);
   const { data: status, reload: reloadStatus } = useLoad("/api/status", STATUS_REFRESH_SECONDS);
-  const { data: settings } = useLoad("/api/settings");
+  const { data: settings, reload: reloadSettings } = useLoad("/api/settings");
+
+  // Settings saved on the Settings page (e.g. Developer mode, name): refresh the sidebar and greeting.
+  useEffect(() => {
+    window.addEventListener(SETTINGS_CHANGED_EVENT, reloadSettings);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, reloadSettings);
+  }, [reloadSettings]);
 
   // Follow the address bar when a navigation link is clicked.
   useEffect(() => {
@@ -53,7 +61,7 @@ export default function App() {
 
   return (
     <div className="layout">
-      <Sidebar page={page} status={status} onTogglePause={togglePause} />
+      <Sidebar page={page} status={status} onTogglePause={togglePause} developerMode={Boolean(settings && settings.developer_mode)} />
       <main className="main">
         <header className="header">
           <div>

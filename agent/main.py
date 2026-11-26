@@ -30,6 +30,7 @@ from agent.app_tracker import AppTracker
 from agent.calibration import Calibration
 from agent.config import Config
 from agent.detector import ConditionDetector
+from agent.devlog import DevLog, developer_mode_on
 from agent.engine import Engine
 from agent.feature_builder import MODELS_DIR, load_feature_spec
 from agent.load_scorer import LoadScorer
@@ -70,6 +71,7 @@ class CommitAgent:
     def __init__(self):
         self.storage = Storage()
         self.config = Config(self.storage)
+        self.dev_log = DevLog(lambda: developer_mode_on(self.storage))   # Developer mode event log (memory only)
         self.engine: Engine | None = None
         self.input_logger: InputLogger | None = None
         self.app_tracker: AppTracker | None = None
@@ -98,9 +100,10 @@ class CommitAgent:
     def start_server(self) -> None:
         """Start the categoriser, the heartbeat worker and the local server for the extension."""
         self.categoriser = TitleCategoriser(self.storage, self.config, keychain.get_api_key)
-        self.heartbeats = HeartbeatProcessor(self.storage, self.config, self.categoriser)
+        self.heartbeats = HeartbeatProcessor(self.storage, self.config, self.categoriser, dev_log=self.dev_log)
         self.heartbeats.start()
-        context = ServerContext(self.storage, self.config, self.categoriser, self.heartbeats, agent=self, keychain=keychain)
+        context = ServerContext(self.storage, self.config, self.categoriser, self.heartbeats, agent=self, keychain=keychain,
+                                dev_log=self.dev_log)
         self.server = LocalServer(create_app(context), self.config.get("server.port"))
         if not self.server.start():
             log.warning("The local server could not start (port %s in use?).", self.config.get("server.port"))
@@ -131,6 +134,7 @@ class CommitAgent:
 
     def delete_now_and_quit(self) -> None:
         self.stop_background_parts()
+        self.dev_log.clear()
         delete_everything(self.storage)
         system.notify("Commit", "All Commit data was deleted.")
         if self.request_quit is not None:
@@ -152,7 +156,8 @@ class CommitAgent:
         feature_spec = load_feature_spec()
         detector, scorer = self.load_models(feature_spec)
         counter = InputCounter(self.config.get("logging.pause_threshold_seconds"), self.config.get("logging.pause_max_seconds"))
-        self.app_tracker = AppTracker(system.get_frontmost_app, self.config.get("logging.app_sample_seconds"), self.config.get("app_categories"))
+        self.app_tracker = AppTracker(system.get_frontmost_app, self.config.get("logging.app_sample_seconds"),
+                                      lambda: self.config.get("app_categories"))   # read each minute: dashboard edits apply at once
         calibration = Calibration(self.storage, self.config.get("calibration.active_minutes"), feature_spec["feature_names"])
         self.start_server()
 
@@ -160,7 +165,7 @@ class CommitAgent:
         worker = AlertWorker()
         flows = AlertFlows(system, self.storage, self.config, self.dnd, record_answer=lambda *args: self.engine.record_answer(*args))
         self.engine = Engine(self.config, self.storage, counter, self.app_tracker, calibration, detector, scorer, worker, flows,
-                             feature_spec, system, heartbeats=self.heartbeats)
+                             feature_spec, system, heartbeats=self.heartbeats, dev_log=self.dev_log)
 
         self.dnd.restore_after_restart()
         self.input_logger = InputLogger(counter)

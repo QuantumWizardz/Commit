@@ -7,6 +7,7 @@ export const PAGES = [
   { id: "report", label: "Weekly report" },
   { id: "alerts", label: "Alerts" },
   { id: "settings", label: "Settings" },
+  { id: "developer", label: "Developer", developerOnly: true },
 ];
 
 /** Text for the state card, e.g. "Commit is on · Calm". */
@@ -16,7 +17,7 @@ function stateText(status) {
   return `Commit is on · ${status.state}`;
 }
 
-export default function Sidebar({ page, status, onTogglePause }) {
+export default function Sidebar({ page, status, onTogglePause, developerMode }) {
   return (
     <aside className="sidebar">
       <div className="logo">
@@ -25,7 +26,7 @@ export default function Sidebar({ page, status, onTogglePause }) {
       </div>
 
       <nav className="nav" aria-label="Main">
-        {PAGES.map((item) => (
+        {PAGES.filter((item) => !item.developerOnly || developerMode || page === item.id).map((item) => (
           <a key={item.id} href={`#/${item.id}`} aria-current={page === item.id ? "page" : undefined}>
             {item.label}
           </a>
