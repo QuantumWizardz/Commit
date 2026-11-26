@@ -23,8 +23,16 @@ def run_common(expression: str):
     return json.loads(output)
 
 
-def describe(url: str, title: str = "A title", private: list | None = None):
-    return run_common(f"c.describePage({json.dumps(url)}, {json.dumps(title)}, {json.dumps(private or [])})")
+def describe(url: str, title: str = "A title", private: list | None = None, port: int = 8765):
+    return run_common(f"c.describePage({json.dumps(url)}, {json.dumps(title)}, {json.dumps(private or [])}, {port})")
+
+
+def test_commit_dashboard_is_reported_only_as_commit():
+    for url in ["http://127.0.0.1:8765/", "http://127.0.0.1:8765/#/developer", "http://localhost:8765/#/settings"]:
+        assert describe(url, "Commit") == {"category": "Commit"}
+    assert describe("http://127.0.0.1:9000/", "Commit", port=9000) == {"category": "Commit"}
+    # Other local pages (e.g. a dev server on another port) are ordinary sites.
+    assert describe("http://localhost:3000/", "My app") == {"domain": "localhost", "title": "My app"}
 
 
 def test_normal_site_sends_domain_and_title_not_url():

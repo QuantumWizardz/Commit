@@ -27,6 +27,7 @@ MODE_IDLE = "idle"
 MODE_PASSIVE = "passive"
 MODE_ACTIVE = "active"
 MODE_PAUSED = "paused"
+MODE_COMMIT = "commit"      # a minute spent mostly in Commit itself (dashboard, dialogs): counted nowhere
 
 
 def load_feature_spec(path: Path = FEATURE_SPEC_FILE) -> dict:

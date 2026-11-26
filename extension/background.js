@@ -13,6 +13,7 @@
  *   normal website          {domain, title, seconds}   the app uses the title to pick a category, then discards it
  *   domain on private list  {category: "Private", seconds}   no domain, no title
  *   chrome:// pages etc.    {category: "Other", seconds}
+ *   the Commit dashboard    {category: "Commit", seconds}   counted nowhere (only tells the app the browser was on Commit)
  *   incognito               nothing — the extension does not run in incognito ("incognito": "not_allowed")
  *
  * Segment state lives in chrome.storage.session (memory only, cleared when Chrome closes).
@@ -39,7 +40,7 @@ async function refreshPrivateDomains() {
 /** Report `seconds` spent on the segment's page. If the app is not running, the time is dropped. */
 async function sendHeartbeat(segment, seconds) {
   const settings = await getSettings();
-  const page = describePage(segment.url, segment.title, settings.privateDomains);
+  const page = describePage(segment.url, segment.title, settings.privateDomains, settings.port);
   await callApp("POST", "/api/web/heartbeat", { ...page, seconds: seconds });
 }
 

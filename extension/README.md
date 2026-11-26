@@ -6,7 +6,7 @@ this computer (`http://127.0.0.1` only). The app uses the title to choose a cate
 | File | Job |
 |---|---|
 | `manifest.json` | Permissions: `tabs`, `idle`, `alarms`, `storage`; host access to `http://127.0.0.1/*` only; never runs in incognito |
-| `common.js` | Shared helpers: what to send for a page (domain / Private / Other), private-list matching, calling the app |
+| `common.js` | Shared helpers: what to send for a page (domain / Private / Other / Commit), private-list matching, calling the app. The Commit dashboard (`127.0.0.1` or `localhost` on Commit's port) is sent only as `Commit`, which the app counts nowhere |
 | `background.js` | Service worker: tracks the active tab in the focused window, pauses when Chrome loses focus, the screen locks or you are idle; heartbeat on tab/title change and every 30 s |
 | `popup.html` / `popup.js` | Connection status, "Don't track this site", the private list, pairing token and port |
 | `welcome.html` | Opened on install: what is (and is never) collected, where it goes, how to exclude sites, how to pair |

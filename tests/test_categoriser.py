@@ -235,3 +235,16 @@ def test_current_domain_expires(storage, config):
     assert processor.current_domain(90) == "meet.google.com"
     clock["now"] += 91
     assert processor.current_domain(90) is None
+
+
+def test_commit_dashboard_heartbeats_are_not_saved(storage, config):
+    from server.categoriser import HeartbeatProcessor
+    consent(storage)
+    processor = HeartbeatProcessor(storage, config, make(storage, config))
+    assert processor.submit(None, None, "Commit", 30)
+    assert processor.submit("127.0.0.1", "Commit", None, 20)          # extension older than 0.3.0
+    assert processor.submit("localhost", "My dev app", None, 10)      # another local page: a normal site
+    processor.process_pending()
+    assert storage.execute("SELECT domain, seconds FROM web_time") == [("localhost", 10)]
+    assert processor.take_commit_seconds() == 50 and processor.take_commit_seconds() == 0
+    assert processor.take_received_seconds() == 60

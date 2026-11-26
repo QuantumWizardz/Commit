@@ -22,11 +22,12 @@ import time
 from collections import deque
 from datetime import datetime
 
-from agent import decisions
+from agent import decisions, devlog
 from server import report
 from server.categoriser import MISCELLANEOUS
 from agent.feature_builder import (
     MODE_ACTIVE,
+    MODE_COMMIT,
     MODE_IDLE,
     MODE_PAUSED,
     RecentMinutes,
@@ -56,13 +57,15 @@ class Engine:
     """The minute loop. Created and started by agent/main.py."""
 
     def __init__(self, config, storage, counter, app_tracker, calibration, detector, load_scorer, worker, flows, feature_spec,
-                 system=None, heartbeats=None, reports_folder=None):
+                 system=None, heartbeats=None, reports_folder=None, dev_log=None):
         """
         In:  config, storage, InputCounter, AppTracker, Calibration, ConditionDetector (or None
              if the model files are missing), LoadScorer (or None), AlertWorker, AlertFlows,
              the features.json contents, the platform module (for notifications),
-             the server's HeartbeatProcessor (or None) and the weekly-report folder (None = default).
+             the server's HeartbeatProcessor (or None), the weekly-report folder (None = default)
+             and the Developer mode DevLog (or None).
         """
+        self.dev_log = dev_log
         self.heartbeats = heartbeats
         self.reports_folder = reports_folder
         self.config = config
@@ -92,6 +95,11 @@ class Engine:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
 
+    def dev(self, kind: str, message: str, /, **data) -> None:
+        """Add an event to the Developer mode log (if there is one; it ignores events while developer mode is off)."""
+        if self.dev_log is not None:
+            self.dev_log.add(kind, message, **data)
+
     # ------------------------------------------------------------------ the minute
 
     def process_minute(self, minute_ts: int, counts: dict, apps: dict, now: float | None = None, now_local: datetime | None = None) -> dict:
@@ -110,6 +118,22 @@ class Engine:
                   "condition": None, "condition_probs": None, "load_score": None}
         if self.paused:
             self.storage.save_minute(record)
+            self.dev(devlog.ACTIVITY, "Paused: nothing counted this minute", minute_ts=minute_ts, mode=MODE_PAUSED)
+            return record
+
+        # The lock screen is not real use, and Commit's own dashboard and dialogs are never counted:
+        # take them out first.
+        apps = self.remove_ignored_apps(apps)
+        apps, commit_seconds, commit_share = self.remove_commit_time(apps)
+        record["app_category"] = apps["main_category"]
+        if commit_share >= self.config.get("activity.commit_minute_share"):
+            record["mode"] = MODE_COMMIT
+            record["app_category"] = None
+            if self.heartbeats is not None:
+                self.heartbeats.take_received_seconds()   # reset; this minute records nothing
+            self.storage.save_minute(record)
+            self.dev(devlog.ACTIVITY, f"Commit minute: {commit_seconds} s in Commit's dashboard or dialogs, not counted",
+                     minute_ts=minute_ts, mode=MODE_COMMIT, commit_seconds=commit_seconds)
             return record
 
         # Time per app (names only) and the activity mode.
@@ -119,6 +143,12 @@ class Engine:
             self.config.get("activity.idle_active_seconds"), self.config.get("activity.passive_active_seconds"),
             self.config.get("activity.passive_categories"),
         )
+        self.dev(devlog.ACTIVITY,
+                 f"{record['mode'].capitalize()} minute · {counts['active_seconds']} s active · {counts['keystrokes']} keys · "
+                 f"{counts['clicks']} clicks · {apps['app_switches']} app switches · main app {apps.get('main_app') or '–'} "
+                 f"({apps['main_category'] or '–'})" + (f" · {commit_seconds} s of Commit removed" if commit_seconds else ""),
+                 minute_ts=minute_ts, mode=record["mode"], counts=counts, app_switches=apps["app_switches"], commit_seconds=commit_seconds,
+                 app_seconds=apps["app_seconds"], app_categories=apps["app_categories"])
         self.record_browser_without_extension(minute_ts, apps, record["mode"])
 
         # Features use the same shared code as training. Idle/passive minutes still count for rolling windows.
@@ -131,6 +161,12 @@ class Engine:
         # Calibration: collect, no predictions or alerts.
         if not self.calibration.is_complete():
             calibration_finished = self.calibration.add_minute(features)
+            if calibration_finished:
+                self.dev(devlog.CALIBRATION, "Calibration complete: baseline saved, predictions start next minute",
+                         baseline=self.calibration.baseline())
+            else:
+                collected, needed = self.calibration.progress()
+                self.dev(devlog.CALIBRATION, f"Calibration minute {collected} of {needed} collected", features=features)
             if calibration_finished and self.system is not None:
                 self.system.notify("Commit", "Commit has learned your normal pattern and is now active.")
             self.status = {"state": STATE_LEARNING, "load_score": None}
@@ -154,14 +190,61 @@ class Engine:
         Does nothing if the model files are missing.
         """
         if self.detector is None or self.load_scorer is None:
+            self.dev(devlog.PREDICTION, "No prediction: the model files are not loaded")
             return
         model_input = normalised_model_input(features, self.calibration.baseline(), self.feature_names)
-        _, smoothed, probabilities = self.detector.predict(model_input)
+        raw, smoothed, probabilities = self.detector.predict(model_input)
         record["features"] = {name: round(float(model_input.iloc[0][name]), 4) for name in self.feature_names}
         record["condition"] = smoothed
         record["condition_probs"] = probabilities
         record["load_score"] = self.load_scorer.score(model_input, smoothed)
         self.status = {"state": STATE_LABELS[smoothed], "load_score": record["load_score"]}
+        self.dev(devlog.PREDICTION,
+                 f"Raw {raw} ({probabilities.get(raw, 0):.0%}) → smoothed {smoothed} · load score {record['load_score']:.0f}",
+                 minute_ts=record["ts"], raw_condition=raw, condition=smoothed, probabilities=probabilities,
+                 load_score=record["load_score"], features=record["features"])
+
+    def remove_ignored_apps(self, apps: dict) -> dict:
+        """
+        Drop apps that are not real use (activity.ignored_apps: the lock screen, the screen saver),
+        so their time is saved nowhere and they never become the minute's main app.
+        """
+        ignored = set(self.config.get("activity.ignored_apps"))
+        if not ignored & set(apps["app_seconds"]):
+            return apps
+        app_seconds = {name: seconds for name, seconds in apps["app_seconds"].items() if name not in ignored}
+        categories = {name: category for name, category in apps["app_categories"].items() if name in app_seconds}
+        main_app = max(app_seconds, key=app_seconds.get) if app_seconds else None
+        return {**apps, "app_seconds": app_seconds, "app_categories": categories, "main_app": main_app,
+                "main_category": categories.get(main_app) if main_app else None}
+
+    def remove_commit_time(self, apps: dict) -> tuple[dict, int, float]:
+        """
+        Take Commit's own time out of one minute's app summary, so it is counted nowhere:
+        its helper processes (activity.commit_apps: dialogs, notifications, menu bar) and the
+        browser seconds the extension reported on the Commit dashboard.
+
+        In:  the app summary from AppTracker.snapshot_and_reset().
+        Out: (summary without Commit, seconds removed, share of the minute's app time that was Commit).
+        """
+        dashboard_seconds = self.heartbeats.take_commit_seconds() if self.heartbeats is not None else 0
+        commit_apps = set(self.config.get("activity.commit_apps"))
+        browser_apps = self.config.get("categoriser.browser_apps")
+        total = sum(apps["app_seconds"].values())
+        app_seconds = {name: seconds for name, seconds in apps["app_seconds"].items() if name not in commit_apps}
+        for name in sorted((n for n in app_seconds if n in browser_apps), key=app_seconds.get, reverse=True):
+            taken = min(app_seconds[name], dashboard_seconds)
+            app_seconds[name] -= taken
+            dashboard_seconds -= taken
+        app_seconds = {name: seconds for name, seconds in app_seconds.items() if seconds > 0}
+        removed = total - sum(app_seconds.values())
+        if removed == 0:
+            return apps, 0, 0.0
+        main_app = max(app_seconds, key=app_seconds.get) if app_seconds else None
+        categories = {name: category for name, category in apps["app_categories"].items() if name in app_seconds}
+        cleaned = {**apps, "app_seconds": app_seconds, "app_categories": categories, "main_app": main_app,
+                   "main_category": categories.get(main_app, apps["main_category"]) if main_app else None}
+        return cleaned, removed, removed / total
 
     # ------------------------------------------------------------------ websites (Phase 2)
 
@@ -176,6 +259,8 @@ class Engine:
         browser_seconds = sum(apps["app_seconds"].get(name, 0) for name in self.config.get("categoriser.browser_apps"))
         if browser_seconds > 0 and received_seconds == 0 and mode != MODE_IDLE:
             self.storage.save_web_time(minute_ts, None, MISCELLANEOUS, browser_seconds)
+            self.dev(devlog.WEBSITE, f"Browser in front but no extension data: {browser_seconds} s saved as {MISCELLANEOUS}",
+                     category=MISCELLANEOUS, seconds=browser_seconds)
 
     def current_domain(self) -> str | None:
         """The website in front right now, if the extension told us recently (for "never interrupt calls")."""
@@ -192,12 +277,21 @@ class Engine:
         domain = self.current_domain()
         with self.state_lock:
             choice = decisions.decide(recent, now, now_local, self.decision_state, self.config, frontmost, domain)
+            checks = decisions.explain(recent, now, now_local, self.decision_state, self.config, frontmost, domain) if self.dev_log else {}
         if choice == decisions.DND:
-            self.worker.submit(lambda: self.flows.dnd_flow(self.dnd_reason(recent)))
+            reason = self.dnd_reason(recent)
+            self.dev(devlog.DECISION, f"Suggest Do Not Disturb: {reason}", choice=choice, frontmost_app=frontmost, domain=domain, checks=checks)
+            self.worker.submit(lambda: self.flows.dnd_flow(reason))
         elif choice == decisions.BREAK:
-            self.worker.submit(lambda: self.flows.break_flow(self.break_reason(recent)))
+            reason = self.break_reason(recent)
+            self.dev(devlog.DECISION, f"Suggest a break: {reason}", choice=choice, frontmost_app=frontmost, domain=domain, checks=checks)
+            self.worker.submit(lambda: self.flows.break_flow(reason))
         elif self.checkin_due(frontmost, domain, now_local) and self.worker.submit(self.flows.checkin_flow):
             self.active_minutes_since_checkin = 0
+            self.dev(devlog.DECISION, "No alert; load check-in is due and was shown", choice="checkin", frontmost_app=frontmost, domain=domain, checks=checks)
+        else:
+            self.dev(devlog.DECISION, f"No alert: {checks.get('reason', '')}", choice=None, frontmost_app=frontmost, domain=domain,
+                     checks=checks, active_minutes_since_checkin=self.active_minutes_since_checkin)
 
     def checkin_due(self, frontmost: str | None, domain: str | None, now_local: datetime) -> bool:
         """True if check-ins are on and consented, enough active minutes passed, and it is not a call/quiet time."""
@@ -236,6 +330,9 @@ class Engine:
             else:
                 decisions.after_break_answer(self.decision_state, action, now, self.config)
             self.storage.set_setting(DECISION_STATE_KEY, self.decision_state.to_dict())
+        label = "Do Not Disturb" if kind == decisions.DND else "Break"
+        self.dev(devlog.ALERT, f"{label} suggestion answered: {action}", kind=kind, action=action,
+                 decision_state=self.decision_state.to_dict())
 
     # ------------------------------------------------------------------ pause, calibration, cleanup
 
@@ -248,6 +345,7 @@ class Engine:
             self.detector.reset()
         self.storage.set_setting(PAUSED_KEY, paused)
         self.status = {"state": STATE_PAUSED if paused else self.current_state_label(), "load_score": None}
+        self.dev(devlog.SYSTEM, "Tracking paused" if paused else "Tracking resumed", paused=paused)
 
     def current_state_label(self) -> str:
         """State label when not paused: Learning during calibration, else the last condition (Calm by default)."""
@@ -263,6 +361,7 @@ class Engine:
         if self.detector is not None:
             self.detector.reset()
         self.status = {"state": STATE_LEARNING, "load_score": None}
+        self.dev(devlog.SYSTEM, "Calibration restarted: learning from the next active minutes")
 
     def cleanup_once_a_day(self, now_local: datetime, now: float) -> None:
         """
@@ -274,6 +373,7 @@ class Engine:
             return
         self.last_cleanup_day = today
         self.storage.delete_older_than(self.config.get("data.retention_days"), now)
+        self.dev(devlog.SYSTEM, f"Daily cleanup: deleted data older than {self.config.get('data.retention_days')} days")
         try:
             new_report = report.ensure_weekly_report(self.storage, self.config, now_local.date(), self.reports_folder, now)
         except Exception:

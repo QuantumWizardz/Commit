@@ -17,6 +17,9 @@ activity:                       # (added in Phase 1) rules for the activity mode
   idle_active_seconds: 5        # fewer active seconds than this in a minute = Idle
   passive_active_seconds: 20    # fewer than this while a video/reading app is in front = Passive
   passive_categories: [Entertainment, Learning]   # app categories that count as video/reading
+  commit_apps: [osascript, Python, Script Editor]   # Commit's own dialogs, menu bar and notifications: never counted
+  ignored_apps: [loginwindow, ScreenSaverEngine]   # lock screen and screen saver: not real use, never counted
+  commit_minute_share: 0.5      # a minute spent at least this much in Commit (dashboard/dialogs) is not counted at all
 
 calibration:
   active_minutes: 15            # minutes of normal work used to learn the personal baseline
@@ -71,7 +74,7 @@ categoriser:
   title_max_chars: 120
   llm_timeout_seconds: 20       # (added in Phase 2) give up on a model reply after this long
   heartbeat_max_seconds: 120    # (added in Phase 2) one heartbeat never counts more than this (protects against clock jumps)
-  browser_apps: ["Google Chrome"]   # (added in Phase 2) Chrome in front with no heartbeat = "Miscellaneous" (e.g. incognito)
+  browser_apps: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Arc", "Vivaldi", "Opera"]   # (added in Phase 2) Chromium browsers that can run the extension; in front with no heartbeat = "Miscellaneous" (e.g. incognito)
   call_domain_max_age_seconds: 90   # (added in Phase 2) a heartbeat this recent tells us which site is in front
   domain_categories:            # (added in Phase 2) built-in rules for clear domains; user corrections override these
     docs.google.com: Work

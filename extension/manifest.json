@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Commit — website time",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sends the website domain, title (for categorising only) and time to the Commit app on this computer. Never page content.",
   "minimum_chrome_version": "120",
   "permissions": ["tabs", "idle", "alarms", "storage"],

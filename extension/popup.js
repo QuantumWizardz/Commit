@@ -14,6 +14,7 @@ const STATUS_TEXT = {
 };
 
 let currentDomain = null;   // domain of the active tab, or null for chrome:// pages
+let onCommitPage = false;   // the active tab is the Commit dashboard (never tracked)
 
 function show(id, text) {
   document.getElementById(id).textContent = text;
@@ -60,7 +61,7 @@ function drawPrivateList(domains) {
 function drawCurrentSite(domains) {
   const button = document.getElementById("current-toggle");
   if (currentDomain === null) {
-    show("current-domain", "Not a website");
+    show("current-domain", onCommitPage ? "Commit dashboard (never counted)" : "Not a website");
     button.hidden = true;
     return;
   }
@@ -110,8 +111,9 @@ async function init() {
   document.getElementById("port-input").value = settings.port;
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const page = tab ? describePage(tab.url || "", "", []) : { category: "Other" };
+  const page = tab ? describePage(tab.url || "", "", [], settings.port) : { category: "Other" };
   currentDomain = page.domain || null;
+  onCommitPage = page.category === "Commit";
 
   document.getElementById("settings-save").addEventListener("click", saveSettings);
   document.getElementById("private-add").addEventListener("click", () => {

@@ -184,6 +184,9 @@ def test_chrome_without_heartbeat_is_miscellaneous(engine_parts):
         def take_received_seconds(self):
             return 0
 
+        def take_commit_seconds(self):
+            return 0
+
         def current_domain(self, max_age_seconds):
             return None
 
@@ -192,3 +195,72 @@ def test_chrome_without_heartbeat_is_miscellaneous(engine_parts):
                      "main_category": "Other", "app_categories": {"Google Chrome": "Other"}}
     engine.process_minute(START_TS, active_counts(random.Random(4)), chrome_minute, now=START_TS + 60)
     assert storage.execute("SELECT domain, category, seconds FROM web_time") == [(None, "Miscellaneous", 60)]
+
+
+class FakeHeartbeats:
+    """The extension reported `received` website seconds, `commit` of them on the Commit dashboard."""
+
+    def __init__(self, received, commit):
+        self.received, self.commit = received, commit
+
+    def take_received_seconds(self):
+        value, self.received = self.received, 0
+        return value
+
+    def take_commit_seconds(self):
+        value, self.commit = self.commit, 0
+        return value
+
+    def current_domain(self, max_age_seconds):
+        return None
+
+
+def test_commit_dashboard_and_dialogs_are_never_counted(engine_parts):
+    engine, _, _, storage = engine_parts
+    rng = random.Random(5)
+
+    # Mostly on the Commit dashboard (50 s of 60 s in Brave) -> a "commit" minute: nothing counted.
+    engine.heartbeats = FakeHeartbeats(received=50, commit=50)
+    minute = {"app_switches": 1, "app_seconds": {"Brave Browser": 50, "Code": 10}, "main_app": "Brave Browser",
+              "main_category": "Other", "app_categories": {"Brave Browser": "Other", "Code": "Work"}}
+    record = engine.process_minute(START_TS, active_counts(rng), minute, now=START_TS + 60)
+    assert record["mode"] == "commit" and record["condition"] is None
+    assert storage.execute("SELECT COUNT(*) FROM app_time")[0][0] == 0
+    assert storage.execute("SELECT COUNT(*) FROM web_time")[0][0] == 0
+    assert engine.calibration.progress()[0] == 0              # not used for calibration either
+
+    # A little Commit (a dialog via osascript + 10 s of dashboard): removed, the rest is counted normally.
+    engine.heartbeats = FakeHeartbeats(received=10, commit=10)
+    minute = {"app_switches": 2, "app_seconds": {"Code": 40, "Brave Browser": 15, "osascript": 5}, "main_app": "Code",
+              "main_category": "Work", "app_categories": {"Code": "Work", "Brave Browser": "Other", "osascript": "Other"}}
+    record = engine.process_minute(START_TS + 60, active_counts(rng), minute, now=START_TS + 120)
+    assert record["mode"] == "active"
+    assert sorted(storage.execute("SELECT app_name, seconds FROM app_time")) == [("Brave Browser", 5), ("Code", 40)]
+    assert storage.execute("SELECT COUNT(*) FROM web_time")[0][0] == 0   # no "Miscellaneous" for the Commit seconds
+
+
+def test_lock_screen_time_is_never_counted(engine_parts):
+    engine, _, _, storage = engine_parts
+    rng = random.Random(6)
+    engine.heartbeats = None
+    minute = {"app_switches": 1, "app_seconds": {"loginwindow": 50, "Code": 10}, "main_app": "loginwindow",
+              "main_category": "Other", "app_categories": {"loginwindow": "Other", "Code": "Work"}}
+    record = engine.process_minute(START_TS, active_counts(rng), minute, now=START_TS + 60)
+    assert record["mode"] != "commit" and record["app_category"] == "Work"   # the lock screen is not the main app
+    assert storage.execute("SELECT app_name, seconds FROM app_time") == [("Code", 10)]
+
+    only_locked = {"app_switches": 0, "app_seconds": {"loginwindow": 60}, "main_app": "loginwindow",
+                   "main_category": "Other", "app_categories": {"loginwindow": "Other"}}
+    engine.process_minute(START_TS + 60, {**active_counts(rng), "active_seconds": 0}, only_locked, now=START_TS + 120)
+    assert storage.execute("SELECT COUNT(*) FROM app_time WHERE app_name = 'loginwindow'")[0][0] == 0
+
+
+def test_app_categories_are_read_live():
+    from agent.app_tracker import AppTracker
+    table = {"Slack": "Communication"}
+    tracker = AppTracker(lambda: "Slack", sample_seconds=5, app_categories=lambda: dict(table))
+    tracker.take_sample()
+    assert tracker.snapshot_and_reset()["main_category"] == "Communication"
+    table["Slack"] = "Work"                    # changed on the dashboard
+    tracker.take_sample()
+    assert tracker.snapshot_and_reset()["main_category"] == "Work"

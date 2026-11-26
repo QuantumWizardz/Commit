@@ -6,6 +6,8 @@
  */
 
 const DEFAULT_PORT = 8765;              // the Commit app's local server port (config server.port)
+const COMMIT_CATEGORY = "Commit";       // Commit's own dashboard: reported only so it is NOT counted anywhere
+const LOCAL_HOSTS = ["127.0.0.1", "localhost"];
 
 /** "WWW.Bank.com" or "https://www.bank.com/login" -> "bank.com" */
 function normaliseDomain(text) {
@@ -18,13 +20,20 @@ function isPrivate(domain, privateDomains) {
   return privateDomains.some((listed) => domain === listed || domain.endsWith("." + listed));
 }
 
+/** True if `parsed` (a URL) is the Commit dashboard, e.g. http://127.0.0.1:8765/#/home. */
+function isCommitDashboard(parsed, commitPort) {
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  return LOCAL_HOSTS.includes(parsed.hostname) && port === String(commitPort || DEFAULT_PORT);
+}
+
 /**
  * Decide what to send for a page.
- * In:  the tab URL, its title, the private list.
- * Out: {domain, title} for normal websites, {category: "Private"} or {category: "Other"} otherwise.
+ * In:  the tab URL, its title, the private list, and the Commit app's port.
+ * Out: {domain, title} for normal websites; {category: "Commit"} for Commit's own dashboard (the app
+ *      then counts that time nowhere); {category: "Private"} or {category: "Other"} otherwise.
  *      The full URL is never sent — only the domain.
  */
-function describePage(url, title, privateDomains) {
+function describePage(url, title, privateDomains, commitPort) {
   let parsed;
   try {
     parsed = new URL(url);
@@ -33,6 +42,9 @@ function describePage(url, title, privateDomains) {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return { category: "Other" };          // chrome://, new tab, extension pages, files
+  }
+  if (isCommitDashboard(parsed, commitPort)) {
+    return { category: COMMIT_CATEGORY };  // no domain, no title
   }
   const domain = normaliseDomain(parsed.hostname);
   if (isPrivate(domain, privateDomains)) {
@@ -79,5 +91,5 @@ async function callApp(method, path, body) {
 
 // Let Node load this file for tests (in Chrome, `module` does not exist).
 if (typeof module !== "undefined") {
-  module.exports = { normaliseDomain, isPrivate, describePage };
+  module.exports = { normaliseDomain, isPrivate, describePage, isCommitDashboard };
 }

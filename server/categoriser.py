@@ -40,6 +40,9 @@ MISCELLANEOUS = "Miscellaneous"
 OTHER = "Other"
 BROWSING = "Browsing"
 SPECIAL_CATEGORIES = (PRIVATE, OTHER)       # the extension may send these without a domain
+COMMIT = "Commit"                           # Commit's own dashboard: never counted anywhere
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+COMMIT_PAGE_TITLE = "Commit"                # the dashboard's <title> (catches extensions older than 0.3.0)
 
 MODE_OFF, MODE_RULES, MODE_LOCAL, MODE_API = "off", "rules", "local", "api"
 SALT_KEY = "title_cache_salt"
@@ -102,6 +105,16 @@ def build_messages(categories: list[str], title: str, domain: str | None) -> lis
     )
     page = f"Title: {title}" if domain is None else f"Website: {domain}\nTitle: {title}"
     return [{"role": "system", "content": instruction}, {"role": "user", "content": page}]
+
+
+def is_commit_page(domain: str | None, title: str | None, category: str | None) -> bool:
+    """
+    True for a heartbeat from Commit's own dashboard: the extension sends category "Commit"
+    (since 0.3.0); older versions sent domain 127.0.0.1/localhost with the page title "Commit".
+    """
+    if category == COMMIT:
+        return True
+    return domain is not None and normalise_domain(domain) in LOCAL_HOSTS and (title or "").strip() == COMMIT_PAGE_TITLE
 
 
 class RateLimiter:
@@ -181,30 +194,41 @@ class TitleCategoriser:
         In:  normalised domain, the page title (may be None/empty).
         Out: a category name.
         """
+        return self.categorise_with_source(domain, title)[0]
+
+    def categorise_with_source(self, domain: str, title: str | None) -> tuple[str, str]:
+        """
+        Like categorise(), but also says how the category was chosen (shown in Developer mode).
+
+        Out: (category, source) where source is one of "rule", "no title", "mode off", "mode rules",
+             "cache", "local model", "api model", "rate limited", "model unavailable".
+        """
         rule = self.rule_category(domain)
         if rule is not None:
-            return rule
+            return rule, "rule"
         mode = self.effective_mode()
-        if mode in (MODE_OFF, MODE_RULES) or not title:
-            return BROWSING
+        if mode in (MODE_OFF, MODE_RULES):
+            return BROWSING, f"mode {mode}"
+        if not title:
+            return BROWSING, "no title"
 
         key = title_hash(self.salt(), domain, title)
         cached = self.storage.cached_category(key)
         if cached is not None:
-            return cached
+            return cached, "cache"
 
         redacted = redact_title(title, self.config.get("categoriser.title_max_chars"))
         if not redacted or not self.rate_limiter.allow(self.clock()):
-            return BROWSING  # not cached: try again next time
+            return BROWSING, "rate limited"  # not cached: try again next time
 
         try:
             answer = self.ask_model(mode, redacted, domain)
         except Exception as error:  # offline, timeout, bad key ... never block, never crash
             log.info("Language model unavailable (%s); using Browsing for now.", type(error).__name__)
-            return BROWSING
+            return BROWSING, "model unavailable"
         category = parse_answer(answer, self.config.get("categoriser.categories"))
         self.storage.cache_category(key, category, int(self.clock()))
-        return category
+        return category, f"{mode} model"
 
     def ask_model(self, mode: str, redacted_title: str, domain: str) -> str:
         """
@@ -253,7 +277,9 @@ class TitleCategoriser:
 class HeartbeatProcessor:
     """Queues heartbeats from the extension and saves them on a background thread."""
 
-    def __init__(self, storage, config, categoriser: TitleCategoriser, clock=time.time):
+    def __init__(self, storage, config, categoriser: TitleCategoriser, clock=time.time, dev_log=None):
+        """dev_log: the Developer mode DevLog (agent/devlog.py) or None. It never receives titles."""
+        self.dev_log = dev_log
         self.storage = storage
         self.config = config
         self.categoriser = categoriser
@@ -261,6 +287,7 @@ class HeartbeatProcessor:
         self.pending: queue.Queue = queue.Queue(maxsize=HEARTBEAT_QUEUE_SIZE)
         self.lock = threading.Lock()
         self.received_seconds = 0          # website seconds received since the agent last asked
+        self.commit_seconds = 0            # of those, seconds on the Commit dashboard (not counted anywhere)
         self.last_domain: str | None = None
         self.last_domain_time = 0.0
         self.stop_event = threading.Event()
@@ -276,6 +303,15 @@ class HeartbeatProcessor:
             return False
         seconds = min(int(seconds), self.config.get("categoriser.heartbeat_max_seconds"))
         now = self.clock()
+        if is_commit_page(domain, title, category):
+            # The browser was on Commit's own dashboard: tell the agent (so it removes that time from the
+            # browser's app time and does not record "Miscellaneous"), but save nothing.
+            with self.lock:
+                self.received_seconds += seconds
+                self.commit_seconds += seconds
+                self.last_domain = None
+            self.dev(f"Commit dashboard · {seconds} s (not counted)", category=COMMIT, seconds=seconds)
+            return True
         with self.lock:
             self.received_seconds += seconds
             self.last_domain = normalise_domain(domain) if domain else None
@@ -290,14 +326,24 @@ class HeartbeatProcessor:
     def save(self, ts: int, domain: str | None, title: str | None, category: str | None, seconds: int) -> None:
         """Categorise one heartbeat and save domain + category + seconds. The title goes out of scope here."""
         if category in SPECIAL_CATEGORIES or not domain:
-            self.storage.save_web_time(ts, None, category if category in SPECIAL_CATEGORIES else OTHER, seconds)
+            saved = category if category in SPECIAL_CATEGORIES else OTHER
+            self.storage.save_web_time(ts, None, saved, seconds)
+            self.dev(f"{saved} page · {seconds} s (no site name kept)", category=saved, seconds=seconds, source="extension")
             return
         domain = normalise_domain(domain)
         if is_private(domain, self.storage.private_domains()):
             # Safety net: the extension should already have hidden it (P4).
             self.storage.save_web_time(ts, None, PRIVATE, seconds)
+            self.dev(f"Private site · {seconds} s (no site name kept)", category=PRIVATE, seconds=seconds, source="private list")
             return
-        self.storage.save_web_time(ts, domain, self.categoriser.categorise(domain, title), seconds)
+        chosen, source = self.categoriser.categorise_with_source(domain, title)
+        self.storage.save_web_time(ts, domain, chosen, seconds)
+        self.dev(f"{domain} → {chosen} · {seconds} s (by {source})", domain=domain, category=chosen, seconds=seconds, source=source)
+
+    def dev(self, message: str, /, **data) -> None:
+        """Add a "website" event to the Developer mode log, if there is one. Never pass the title here (P3)."""
+        if self.dev_log is not None:
+            self.dev_log.add("website", message, **data)
 
     def process_pending(self) -> None:
         """Save every queued heartbeat now (also used by tests)."""
@@ -336,6 +382,13 @@ class HeartbeatProcessor:
         with self.lock:
             seconds = self.received_seconds
             self.received_seconds = 0
+            return seconds
+
+    def take_commit_seconds(self) -> int:
+        """Seconds on the Commit dashboard since the last call (the agent calls this once a minute)."""
+        with self.lock:
+            seconds = self.commit_seconds
+            self.commit_seconds = 0
             return seconds
 
     def current_domain(self, max_age_seconds: float) -> str | None:
